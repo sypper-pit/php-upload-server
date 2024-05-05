@@ -1,121 +1,182 @@
 <?php
-session_start();
-
-// Очистка сессии если ответ правильный
-if (isset($_SESSION['answer_correct']) && $_SESSION['answer_correct']) {
-    session_destroy();
-    session_start();  // Начинаем новую сессию после очистки
+// Проверка версии PHP
+if (version_compare(PHP_VERSION, '8.2.0', '<')) {
+    die('Error: PHP 8.2 or higher is required.');
 }
 
-// Генерация новых случайных чисел каждый раз, когда страница загружается
-$_SESSION['num1'] = rand(1, 10);
-$_SESSION['num2'] = rand(1, 10);
-
-// Проверка ответа пользователя
-$correctAnswer = $_SESSION['num1'] + $_SESSION['num2'];
-$userAnswer = filter_input(INPUT_POST, 'answer', FILTER_VALIDATE_INT);
-
-$_SESSION['answer_correct'] = false;  // Инициализация статуса ответа как неверный
-if ($userAnswer !== null && $userAnswer === $correctAnswer) {
-    $_SESSION['answer_correct'] = true;  // Обновление статуса ответа на правильный
+// Проверяем наличие необходимых расширений
+if (!extension_loaded('imagick')) {
+    die("Error: The Imagick extension is not installed on this server.");
+}
+if (!class_exists('ZipArchive')) {
+    die("Error: The ZipArchive class is not available on this server.");
 }
 
+// Допустимые расширения файлов
+$allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'mp4', 'mov', 'avi', 'mkv', 'pdf', 'doc', 'docx', 'xls', 'xlsx'];
+
+// Обработчик загрузки файла
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES["fileUpload"])) {
+    $uploadDir = "uploads/";
+    $file = $_FILES["fileUpload"];
+    $extension = strtolower(pathinfo($file["name"], PATHINFO_EXTENSION));
+
+    // Проверка расширения файла
+    if (!in_array($extension, $allowedExtensions)) {
+        $response = "Invalid file type. Only the following file types are allowed: " . implode(", ", $allowedExtensions);
+        echo $response;
+        exit;
+    }
+
+    $randomName = bin2hex(random_bytes(6));
+    $timestamp = time();
+    $newFilename = $randomName . $timestamp . "." . $extension . ".zip";
+
+    $zip = new ZipArchive();
+    if ($zip->open($uploadDir . $newFilename, ZipArchive::CREATE) === TRUE) {
+        $zip->addFile($file["tmp_name"], $randomName . $timestamp . "." . $extension);
+        $zip->close();
+        $response = "File is compressed and stored.";
+    } else {
+        $response = "Failed to compress the file.";
+    }
+
+    $fileUrl = "https://" . $_SERVER['HTTP_HOST'] . $_SERVER['SCRIPT_NAME'] . "?file=" . $randomName . $timestamp . "." . $extension;
+    $mimeType = mime_content_type($file["tmp_name"]);
+    $displayLink = "<a href='#' onclick='copyLink(\"" . $fileUrl . "\")'>" . $fileUrl . "</a>";
+    if (strpos($mimeType, 'image/') === 0) {
+        $displayLink .= "<br><img src='" . $fileUrl . "' alt='Uploaded Image' style='margin-top: 10px;' width='60%' height='auto'>";
+    } elseif (strpos($mimeType, 'video/') === 0) {
+        $displayLink .= "<br><video width='320' height='240' controls><source src='" . $fileUrl . "' type='" . $mimeType . "'>Your browser does not support the video tag.</video>";
+    } else {
+        $displayLink .= "<br><a href='" . $fileUrl . "' target='_blank'>Download File</a>";
+    }
+
+    echo $response . "<br>" . $displayLink . "<br><div id='copyLinkMessage'></div>";
+    exit;
+}
+
+// Обработчик отображения файла
+if (isset($_GET['file'])) {
+    $filename = $_GET['file'];
+    $zipPath = "uploads/" . $filename . ".zip";
+
+    if (file_exists($zipPath)) {
+        $zip = new ZipArchive();
+        if ($zip->open($zipPath)) {
+            $tmpDir = "uploads/tmp/" . bin2hex(random_bytes(5)) . "/";
+            if (!file_exists($tmpDir)) {
+                mkdir($tmpDir, 0777, true);
+            }
+            $zip->extractTo($tmpDir);
+            $zip->close();
+            $filePath = $tmpDir . $filename;
+
+            if (file_exists($filePath)) {
+                $mimeType = mime_content_type($filePath);
+                header("Content-Type: $mimeType");
+                header("Content-Disposition: inline; filename=\"$filename\"");
+                readfile($filePath);
+
+                unlink($filePath);
+                rmdir($tmpDir);
+
+                exit;
+            }
+        }
+    }
+    echo "File not found.";
+    exit;
+}
 ?>
-
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>File upload</title>
-    <link href="./init/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="./init/bootstrap.min.css">
+    <title>File Upload</title>
     <link rel="icon" type="image/png" href="./init/favicon.png">
-    <script src="./init/jquery.min.js"></script>
     <style>
         body {
-            background-color: #343a40;
-            color: #fff;
-        }
-        .container {
             display: flex;
-            flex-direction: column;
-            align-items: center;
             justify-content: center;
+            align-items: center;
             height: 100vh;
         }
-        h1 {
-            text-align: center;
+        .container {
+            margin: 10px;
         }
-        input[type="number"] {
-            width: 80px;
-            -webkit-appearance: none;  /* Добавлено для удаления стрелок в Chrome/Safari */
-            -moz-appearance: textfield; /* Добавлено для удаления стрелок в Firefox */
+        #copyLinkMessage {
+            position: fixed; /* Изменено на фиксированное позиционирование */
+            top: 50%; /* Центрирование по вертикали */
+            left: 50%; /* Центрирование по горизонтали */
+            transform: translate(-50%, -50%); /* Настройка точного центрирования */
+            background-color: white; /* Фоновый цвет */
+            color: black; /* Цвет текста */
+            padding: 10px; /* Внутренние отступы */
+            border-radius: 5px; /* Закругление углов */
+            display: none; /* Скрываем по умолчанию */
+            z-index: 1050; /* Поверх других элементов */
         }
-        input[type="number"]::-webkit-inner-spin-button, 
-        input[type="number"]::-webkit-outer-spin-button {
-            -webkit-appearance: none;
-            margin: 0;
-        }
-        /* Стили для модального окна, чтобы оно открывалось на весь экран */
-        .modal-dialog {
-            max-width: 100%;
-            width: 100vw; /* Ширина окна на весь экран */
-            height: 100vh; /* Высота окна на весь экран */
-            margin: 0;
-            border: none;
-        }
-        
-        .modal-content {
-            height: 100vh; /* Высота контента на весь экран */
-            border: none; /* Рамка в 1 пиксель */
-        }
-        
-        iframe {
-            border: none; /* Убираем рамку у iframe */
-            width: 100%;
-            height: 100%;
-        }
-
     </style>
-
 </head>
-<body>
-    <div class="container">
-        <img src="./init/logo.png" alt="Logo" class="mb-4" width="60%" height="auto">
-        <h1>What is <?php echo $_SESSION['num1'] . ' + ' . $_SESSION['num2']; ?>?</h1>
-        <p>Enter the number to upload the file</p>
-        <form method="POST" class="text-center">
-            <input type="number" name="answer" id="answer" min="1" max="99" autofocus oninput="checkAnswer()" class="form-control mb-3" style="width: 80px; margin: 0 auto;">
+<body class="bg-dark text-white">
+    <div class="container text-center">
+        <form id="uploadForm" enctype="multipart/form-data">
+            <input type="file" class="form-control" name="fileUpload" id="fileInput" style="margin-bottom: 10px;">
+            <button type="submit" class="btn btn-primary mt-3" id="uploadButton" disabled>Upload File</button>
         </form>
-
-        <!-- Модальное окно для отображения file.php -->
-        <div class="modal fade" id="resultModal" tabindex="-1" role="dialog" aria-labelledby="resultModalLabel" aria-hidden="true">
-            <div class="modal-dialog" role="document">
-                <div class="modal-content">
-                    <div class="modal-body">
-                        <iframe src="./file.php" width="100%" height="600"></iframe>
-                    </div>
-                </div>
-            </div>
+        <div id="progressBar" class="progress mt-3" style="height: 30px; display: none;">
+            <div class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
         </div>
+        <div id="uploadResult"></div>
     </div>
 
-    <script src="./init/bootstrap.min.js"></script>
+    <script src="./init/bootstrap.bundle.min.js"></script>
     <script>
-        function checkAnswer() {
-            var userAnswer = document.getElementById('answer').value;
-            var correctAnswer = <?php echo $correctAnswer; ?>;
-    
-            if (parseInt(userAnswer) === correctAnswer) {
-                $('#resultModal').modal({
-                    backdrop: 'static', // Опционально: делаем фон некликабельным
-                    keyboard: false    // Опционально: блокируем закрытие модального окна клавишей ESC
-                });
-                $('#resultModal').modal('show'); // Показываем модальное окно
-            }
+        document.getElementById('fileInput').addEventListener('change', function() {
+            var uploadButton = document.getElementById('uploadButton');
+            uploadButton.disabled = !this.files.length;
+        });
+
+        document.getElementById('uploadForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            var formData = new FormData(this);
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "", true);
+
+            xhr.upload.onprogress = function(event) {
+                var percent = (event.loaded / event.total) * 100;
+                var progressBar = document.querySelector('.progress-bar');
+                document.getElementById('progressBar').style.display = 'block';
+                progressBar.style.width = percent + '%';
+                progressBar.textContent = Math.round(percent) + '%';
+            };
+
+            xhr.onload = function() {
+                if (xhr.status == 200) {
+                    document.getElementById('uploadResult').innerHTML = xhr.responseText;
+                } else {
+                    alert('Upload failed');
+                }
+            };
+
+            xhr.send(formData);
+        });
+
+        function copyLink(url) {
+            navigator.clipboard.writeText(url).then(function() {
+                var messageBox = document.getElementById('copyLinkMessage');
+                messageBox.textContent = 'Link copied!';
+                messageBox.style.display = 'block';
+                setTimeout(function() {
+                    messageBox.style.display = 'none';
+                }, 1500);
+            }, function(err) {
+                alert('Copy error: ' + err);
+            });
         }
     </script>
-
-
 </body>
 </html>
