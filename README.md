@@ -1,4 +1,3 @@
 Simple php upload server
 
-Need php >= 8.2 
-Need php-extension: fileinfo, imagemagik, exif
+Need php >= 8.2 and php-extension(fileinfo, imagemagik, exif)
